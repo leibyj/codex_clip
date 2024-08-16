@@ -1,6 +1,9 @@
 # Always with the DS_Store....
 .DS_Store
 
+# hydra
+outputs/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
