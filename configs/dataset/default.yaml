@@ -1,0 +1,4 @@
+# dataset
+path: "data/my_dataset.pkl"
+batch_size: 2
+shuffle: True

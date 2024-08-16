@@ -1,0 +1,26 @@
+dataset:
+  dataset:
+    path: data/my_dataset.pkl
+    batch_size: 2
+    shuffle: true
+model:
+  model:
+    name: CodexEncoder
+    marker_groups: 2
+    text_model: microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext
+    codex_dim: 384
+    text_dim: 768
+    projection_dim: 512
+    max_length: 256
+training:
+  training:
+    epochs: 10
+    learning_rate: 0.001
+    optimizer: adam
+loss:
+  loss:
+  - name: MMCLIPLoss
+  - temperature: 0.7
+project:
+  name: My Codex Project
+  seed: 42

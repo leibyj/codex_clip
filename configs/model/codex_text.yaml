@@ -1,0 +1,8 @@
+# model
+  name: "codex_text"
+  marker_groups: 2 #number of different groupings
+  text_model: 'microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext'
+  codex_dim: 384
+  text_dim: 768
+  projection_dim: 512
+  max_length: 256 # context window for BERT

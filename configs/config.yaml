@@ -1,0 +1,10 @@
+defaults:
+  - dataset: default
+  - model: codex_text
+  - training: base
+  - loss: base
+
+# General project settings
+project:
+  name: "My Codex Project"
+  seed: 42
