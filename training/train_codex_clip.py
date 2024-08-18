@@ -24,12 +24,9 @@ def train(cfg: DictConfig):
 
     # marker_groups = {'tumor': ["C4d", "DAPI"], 'stroma': ['CD38', 'Tbet', "DAPI"]}
 
-    # tokenizer = BertTokenizer.from_pretrained(cfg.model.text_model)
-    "microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext"
-    tokenizer = BertTokenizer.from_pretrained("microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext")
+    tokenizer = BertTokenizer.from_pretrained(cfg.model.text_model)
     train_data = CodexTextDataset(demo_data, tokenizer=tokenizer, max_len=cfg.model.max_length, tumor = ["C4d", "DAPI"], stroma = ['CD38', 'Tbet', "DAPI"])
 
-    # train_data = CodexTextDataset(path=cfg.dataset.path, tokenizer=tokenizer, )
     train_loader = DataLoader(train_data, batch_size=cfg.dataset.batch_size, shuffle=cfg.dataset.shuffle)
 
     # prep model and optimizer
@@ -41,6 +38,7 @@ def train(cfg: DictConfig):
         projection_dim=cfg.model.projection_dim
     )
 
+    # 
     if cfg.training.optimizer == "adam":
         optimizer = torch.optim.Adam(model.parameters(), lr=cfg.training.learning_rate)
     elif cfg.training.optimizer == "sgd":
