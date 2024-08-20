@@ -17,7 +17,7 @@ from utils import MMCLIPLoss
 def train(cfg: DictConfig):
     # load data
 
-    workdir = "/Users/jacobleiby/Desktop/postdoc/Enable"
+    workdir = "/Users/jacobleiby/Documents/GitHub/codex_clip"
 
     with open(join(workdir, "data/s314_mIF+he+text.pkl"), "rb") as f:
         demo_data = pickle.load(f)
@@ -35,7 +35,8 @@ def train(cfg: DictConfig):
         hf_model=cfg.model.text_model,
         codex_dim=cfg.model.codex_dim,
         text_dim=cfg.model.text_dim,
-        projection_dim=cfg.model.projection_dim
+        projection_dim=cfg.model.projection_dim,
+        shared_projection=cfg.model.shared_projection
     )
 
     # 

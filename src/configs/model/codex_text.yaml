@@ -6,3 +6,4 @@
   text_dim: 768
   projection_dim: 512
   max_length: 256 # context window for BERT
+  shared_projection: False
