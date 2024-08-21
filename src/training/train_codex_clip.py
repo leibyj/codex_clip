@@ -15,17 +15,17 @@ from utils import MMCLIPLoss
 
 @hydra.main(config_path="../configs", config_name="config")
 def train(cfg: DictConfig):
-    # load data
+    device = torch.device("gpu" if torch.cuda.is_available() else "cpu")
+    print(f'Running on: {device}')
 
+    # load data
     workdir = "/Users/jacobleiby/Documents/GitHub/codex_clip"
 
     with open(join(workdir, "data/s314_mIF+he+text.pkl"), "rb") as f:
         demo_data = pickle.load(f)
 
-    # marker_groups = {'tumor': ["C4d", "DAPI"], 'stroma': ['CD38', 'Tbet', "DAPI"]}
-
     tokenizer = BertTokenizer.from_pretrained(cfg.model.text_model)
-    train_data = CodexTextDataset(demo_data, tokenizer=tokenizer, max_len=cfg.model.max_length, tumor = ["C4d", "DAPI"], stroma = ['CD38', 'Tbet', "DAPI"])
+    train_data = CodexTextDataset(demo_data, tokenizer=tokenizer, max_len=cfg.dataset.max_length, **cfg.dataset.channel_groups)
 
     train_loader = DataLoader(train_data, batch_size=cfg.dataset.batch_size, shuffle=cfg.dataset.shuffle)
 
@@ -36,8 +36,9 @@ def train(cfg: DictConfig):
         codex_dim=cfg.model.codex_dim,
         text_dim=cfg.model.text_dim,
         projection_dim=cfg.model.projection_dim,
-        shared_projection=cfg.model.shared_projection
-    )
+        shared_projection=cfg.model.shared_projection,
+        device=device
+    ).to(device)
 
     # 
     if cfg.training.optimizer == "adam":
@@ -46,13 +47,17 @@ def train(cfg: DictConfig):
         optimizer = torch.optim.SGD(model.parameters(), lr=cfg.training.learning_rate)
     
     # loss function
-    criterion = MMCLIPLoss(temperature=cfg.loss.temperature)
+    criterion = MMCLIPLoss(temperature=cfg.loss.temperature).to(device)
 
 
     # Training loop
     for epoch in range(cfg.training.epochs):
         model.train()
         for batch in tqdm(train_loader):
+            # batch = {key: val.to(device) for key, val in batch.items()}
+            batch['codex'] = [(img.to(device), {'channels': channels['channels'].to(device)}) for img, channels in batch['codex']]
+            batch['text'] = batch['text'].to(device)
+
             optimizer.zero_grad()
             embeddings = model(batch)
             loss = criterion(embeddings)

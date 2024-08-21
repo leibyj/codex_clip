@@ -2,3 +2,7 @@
 path: "data/my_dataset.pkl"
 batch_size: 2
 shuffle: True
+max_length: 256 # context window for BERT
+channel_groups:
+  tumor: ["C4d", "DAPI"]
+  stroma: ["CD38", "Tbet", "DAPI"]

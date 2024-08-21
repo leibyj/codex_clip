@@ -9,10 +9,21 @@ class CodexCLIP(nn.Module):
                  codex_dim = 384,
                  text_dim = 768,
                  projection_dim = 512,
-                 shared_projection = False):
+                 shared_projection = False,
+                 device='cpu'):
+        """
+        Args:
+            marker_groups (int): Number of marker groups, used to initialize the CodexEncoder.
+            hf_model (str): The Hugging Face model identifier for the text encoder.
+            codex_dim (int): The dimensionality of the Codex encoder output.
+            text_dim (int): The dimensionality of the text encoder output.
+            projection_dim (int): The dimensionality of the projection layers.
+            shared_projection (bool): If True, a shared projection layer is used for both Codex and text features.
+            device (str): The device for CodexEncoder.
+        """
         super(CodexCLIP, self).__init__()
         
-        self.codex_encoder = models.encoders.CodexEncoder(marker_groups=marker_groups)
+        self.codex_encoder = models.encoders.CodexEncoder(marker_groups=marker_groups, device=device)
         self.text_encoder = BertModel.from_pretrained(hf_model)
         
         #TODO Finetuning parameters (where should encoder params be trained/frozen?)
