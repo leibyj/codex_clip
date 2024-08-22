@@ -34,7 +34,7 @@ class CodexEncoder(nn.Module):
     def _load_channelvit_model(self, device):
         # trouble getting it to load on correct device without adding that here
         model = torch.hub.load('insitro/ChannelViT', 'cpjump_cellpaint_bf_channelvit_small_p8_with_hcs_supervised', pretrained=False)
-        state_dict = torch.load("/Users/jacobleiby/Downloads/cpjump_cellpaint_bf_channelvit_small_p8_with_hcs_supervised.pth", map_location=device, weights_only=True)
+        state_dict = torch.load("/project/zhihuanglab/jleiby/cvit_weights/cpjump_cellpaint_bf_channelvit_small_p8_with_hcs_supervised.pth", map_location=device, weights_only=True)
         model.load_state_dict(state_dict)
         return model.to(device)
     

@@ -1,0 +1,27 @@
+name: codex_clip
+channels:
+  - conda-forge
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.11
+  - pytorch=2.4.0
+  - torchvision=0.19.0
+  - numpy=1.26.4
+  - pandas=2.2.2
+  - scikit-learn=1.5.1
+  - scipy=1.13.1
+  - transformers=4.44.0
+  - tqdm=4.66.4
+  - jupyter_core=5.7.2
+  - jupyter_client=8.6.2
+  - ipykernel=6.29.5
+  - pyyaml=6.0.1
+  - pyzmq=25.1.1
+  - pip=24.0
+  - zlib=1.2.13
+  - openssl=3.3.1
+  - ca-certificates=2024.7.4
+  - wheel=0.43.0
+  - typing-extensions=4.11.0
+  - wandb=0.16.6

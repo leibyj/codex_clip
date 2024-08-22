@@ -1,10 +1,12 @@
 defaults:
+  - _self_
   - dataset: default
   - model: codex_text
   - training: base
   - loss: base
 
-# General project settings
-project:
-  name: "My Codex Project"
-  seed: 42
+
+wandb:
+  project_name: 'codex-text'
+  run_name: 'test_run1'
+

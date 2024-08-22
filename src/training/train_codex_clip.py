@@ -15,11 +15,21 @@ from utils import MMCLIPLoss
 
 @hydra.main(config_path="../configs", config_name="config")
 def train(cfg: DictConfig):
-    device = torch.device("gpu" if torch.cuda.is_available() else "cpu")
+    # Initialize WandB
+    
+    wandb.init(
+        project=cfg.wandb.project_name,
+        name=cfg.wandb.run_name,  # sets the run name
+        # tags=cfg.wandb.tags,  # applies the tags
+        # notes=cfg.wandb.notes,  # includes notes
+        # mode=cfg.wandb.mode  # sets the mode (online, offline, disabled)
+    )
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f'Running on: {device}')
 
     # load data
-    workdir = "/Users/jacobleiby/Documents/GitHub/codex_clip"
+    workdir = "/project/zhihuanglab/jleiby/codex_clip"
 
     with open(join(workdir, "data/s314_mIF+he+text.pkl"), "rb") as f:
         demo_data = pickle.load(f)
@@ -61,10 +71,16 @@ def train(cfg: DictConfig):
             optimizer.zero_grad()
             embeddings = model(batch)
             loss = criterion(embeddings)
-            print(loss)
             loss.backward()
             optimizer.step()
-        print(f'Epoch {epoch+1}/{cfg.training.epochs}, Loss: {loss.item()}')
+
+            total_loss += loss.item()
+
+        avg_loss = total_loss / len(train_loader)
+        print(f'Epoch {epoch+1}/{cfg.training.epochs}, Loss: {avg_loss}')
+        wandb.log({"epoch": epoch+1, "loss": avg_loss})
+
+    wandb.finish()
 
 if __name__ == "__main__":
     train()
