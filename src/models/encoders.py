@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 
 class CodexEncoder(nn.Module):
-    def __init__(self, marker_groups=0, hidden_dim=384, device='cpu'):
+    def __init__(self, marker_groups=0, hidden_dim=384, device='cpu', pt_path=''):
         """
         Args:
             marker_groups (int): The number of marker groups, determining how many ChannelViTs to initialize.
@@ -13,7 +13,7 @@ class CodexEncoder(nn.Module):
         super(CodexEncoder, self).__init__()
 
         # initialize ChannelViTs for each marker group        
-        self.channelvit = [self._load_channelvit_model(device) for i in range(marker_groups)]
+        self.channelvit = [self._load_channelvit_model(device, pt_path) for i in range(marker_groups)]
 
         # project combined embeddings to lower dimension (combined_dim (3 * 384) -> MHA embed dim)
         self.projection = nn.Sequential(
@@ -31,10 +31,10 @@ class CodexEncoder(nn.Module):
             nn.LayerNorm(hidden_dim)
         )
 
-    def _load_channelvit_model(self, device):
+    def _load_channelvit_model(self, device, pt_path):
         # trouble getting it to load on correct device without adding that here
         model = torch.hub.load('insitro/ChannelViT', 'cpjump_cellpaint_bf_channelvit_small_p8_with_hcs_supervised', pretrained=False)
-        state_dict = torch.load("/project/zhihuanglab/jleiby/cvit_weights/cpjump_cellpaint_bf_channelvit_small_p8_with_hcs_supervised.pth", map_location=device, weights_only=True)
+        state_dict = torch.load(f"{pt_path}/cpjump_cellpaint_bf_channelvit_small_p8_with_hcs_supervised.pth", map_location=device, weights_only=True)
         model.load_state_dict(state_dict)
         return model.to(device)
     

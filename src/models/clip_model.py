@@ -10,7 +10,8 @@ class CodexCLIP(nn.Module):
                  text_dim = 768,
                  projection_dim = 512,
                  shared_projection = False,
-                 device='cpu'):
+                 device='cpu',
+                 pt_path=''):
         """
         Args:
             marker_groups (int): Number of marker groups, used to initialize the CodexEncoder.
@@ -23,7 +24,7 @@ class CodexCLIP(nn.Module):
         """
         super(CodexCLIP, self).__init__()
         
-        self.codex_encoder = models.encoders.CodexEncoder(marker_groups=marker_groups, device=device)
+        self.codex_encoder = models.encoders.CodexEncoder(marker_groups=marker_groups, device=device, pt_path=pt_path)
         self.text_encoder = BertModel.from_pretrained(hf_model)
         
         #TODO Finetuning parameters (where should encoder params be trained/frozen?)

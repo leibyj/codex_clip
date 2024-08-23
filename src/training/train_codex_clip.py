@@ -29,7 +29,7 @@ def train(cfg: DictConfig):
     print(f'Running on: {device}')
 
     # load data
-    workdir = "/project/zhihuanglab/jleiby/codex_clip"
+    workdir = cfg.dataset.path
 
     with open(join(workdir, "data/s314_mIF+he+text.pkl"), "rb") as f:
         demo_data = pickle.load(f)
@@ -47,7 +47,8 @@ def train(cfg: DictConfig):
         text_dim=cfg.model.text_dim,
         projection_dim=cfg.model.projection_dim,
         shared_projection=cfg.model.shared_projection,
-        device=device
+        device=device,
+        pt_path=cfg.model.pt_path
     ).to(device)
 
     # 
@@ -61,6 +62,7 @@ def train(cfg: DictConfig):
 
 
     # Training loop
+    total_loss = 0
     for epoch in range(cfg.training.epochs):
         model.train()
         for batch in tqdm(train_loader):
