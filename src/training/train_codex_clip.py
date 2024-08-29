@@ -62,8 +62,8 @@ def train(cfg: DictConfig):
 
 
     # Training loop
-    total_loss = 0
     for epoch in range(cfg.training.epochs):
+        total_loss = 0
         model.train()
         for batch in tqdm(train_loader):
             # batch = {key: val.to(device) for key, val in batch.items()}
@@ -80,7 +80,7 @@ def train(cfg: DictConfig):
 
         avg_loss = total_loss / len(train_loader)
         print(f'Epoch {epoch+1}/{cfg.training.epochs}, Loss: {avg_loss}')
-        wandb.log({"epoch": epoch+1, "loss": avg_loss})
+        wandb.log({"loss": avg_loss})
 
     wandb.finish()
 

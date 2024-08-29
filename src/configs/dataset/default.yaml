@@ -1,8 +1,15 @@
 # dataset
 path: "data/my_dataset.pkl"
-batch_size: 2
+file: "s255_c001_v001_r001_reg002_processed.pkl"
+batch_size: 4
 shuffle: True
-max_length: 256 # context window for BERT
+max_length: 128 # context window for BERT
 channel_groups:
-  tumor: ["C4d", "DAPI"]
-  stroma: ["CD38", "Tbet", "DAPI"]
+  immune: ['C1QC', 'C3a', 'CD68', 'PD1', 'FoxP3']
+  tumor: ['EpCAM', 'SPP1', 'CD227', 'bCatenin1', 'TFAM']
+  # t_cells_and_functional_lymphoid_markers: ["CD3e", "CD4", "CD8", "FoxP3", "CD45RA", "CD45RO", "PD1", "RORgammaT"]
+  # b_cells_nk_cells_and_lymphoid_markers: ["CD20", "CD21", "CD56", "GranzymeB", "ICOS", "CD38", "CD107a", "CD183"]
+  # myeloid_cells_and_macrophages: ["CD11b", "CD14", "CD68"]
+  # endothelial_and_stromal_markers: ["CD31", "CD34", "Podoplanin", "aSMA", "Vimentin", "PGP9.5", "CD141", "C4d"]
+  # epithelial_and_cancer_associated_markers: ["PanCK", "PDL1", "Ki67", "GATA3", "Tbet", "CD134", "CD197", "aSMA"]
+  # general_and_cross_category_markers: ["DAPI", "HLA-DR", "CD45", "C4d", "GATA3", "PGP9.5", "Vimentin"]

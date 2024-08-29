@@ -25,7 +25,11 @@ class CodexCLIP(nn.Module):
         super(CodexCLIP, self).__init__()
         
         self.codex_encoder = models.encoders.CodexEncoder(marker_groups=marker_groups, device=device, pt_path=pt_path)
+        for param in self.codex_encoder.parameters():
+            param.requires_grad = True
         self.text_encoder = BertModel.from_pretrained(hf_model)
+        for param in self.text_encoder.parameters():
+            param.requires_grad = True
         
         #TODO Finetuning parameters (where should encoder params be trained/frozen?)
         
@@ -54,7 +58,7 @@ class CodexCLIP(nn.Module):
 
     def forward(self, data):
         image_features = self.codex_projection(self.codex_encoder(data['codex']))
-        text_features = self.text_projection(self.text_encoder(data['text']).last_hidden_state[:, 0, :])  # Use the CLS token output
+        text_features = self.text_projection(self.text_encoder(data['text'], data['att_mask']).last_hidden_state[:, 0, :])  # Use the CLS token output
         
         return {'codex': image_features, 
                 'text': text_features}
