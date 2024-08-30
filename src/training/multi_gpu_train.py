@@ -13,7 +13,7 @@ from os.path import join
 import os
 
 from models import CodexCLIP
-from data import CodexTextDataset
+from data import CodexTextDataset, MultiCodexTextDataset
 from utils import MMCLIPLoss
 
 def setup_fsdp(rank, world_size):
@@ -44,13 +44,13 @@ def train(rank, cfg: DictConfig):
     print(f'Running on: {device}')
 
     # Load data
-    workdir = cfg.dataset.path
+    # data = cfg.dataset.path
 
-    with open(join(workdir, f"data/{cfg.dataset.file}"), "rb") as f:
-        demo_data = pickle.load(f)
+    # with open(join(workdir, f"data/{cfg.dataset.file}"), "rb") as f:
+    #     demo_data = pickle.load(f)
 
     tokenizer = BertTokenizer.from_pretrained(cfg.model.text_model)
-    train_data = CodexTextDataset(demo_data, tokenizer=tokenizer, max_len=cfg.dataset.max_length, **cfg.dataset.channel_groups)
+    train_data = MultiCodexTextDataset(cfg.dataset.path, ['s255_c001_v001_r001_reg002', 's255_c001_v001_r001_reg022'], tokenizer=tokenizer, max_len=cfg.dataset.max_length, **cfg.dataset.channel_groups)
 
     if n_gpus > 1:
         train_sampler = DistributedSampler(train_data, num_replicas=n_gpus, rank=rank)

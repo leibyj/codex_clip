@@ -75,7 +75,7 @@ class MultiCodexTextDataset(Dataset):
         Args:
             root_dir (str): Directory where the .pkl files are stored.
             region_ids (list of str): List of region IDs to load.
-            tokenizer (transformers.PreTrainedTokenizer): HF tokenizer.
+            tokenizer (transformers.PreTrainedTokenizer): HF tokenizer
             max_len (int): context length for text data.
             channel_groups: Keyword args for marker groups. Example: 
                             tumor = ["C4d", "DAPI"], stroma = ['CD38', 'Tbet']
@@ -86,46 +86,58 @@ class MultiCodexTextDataset(Dataset):
         self.max_len = max_len
         self.channel_groups = channel_groups
         
-        # Load and store the data from all .pkl files
-        self.files = {rid: self.load_pickle_file(rid) for rid in self.region_ids}
+        # Store a list of all (region_id, sample_id) pairs
+        self.sample_index = self.build_sample_index()
 
-        # Flattened list of all (region_ids, sample_id) pairs
-        self.sample_index = [
-            (rid, sample_id) 
-            for rid in self.region_ids 
-            for sample_id in self.files[rid].keys()
-        ]
-
+        ### THIS ASSUMES ALL MARKERS ARE IN SAME ORDER AS IN FIRST FILE
         # Extract channel biomarkers from the first file
-        channel_biomarkers = list(self.files[self.region_ids[0]]["channel_biomarkers"])
+        # with open(os.path.join(self.root_dir, f'{self.region_ids[0]}_processed.pkl'), 'rb') as f:
+        #     file = pickle.load(f)
+        #     channel_biomarkers = list(file["channel_biomarkers"])
         
-        # Convert channel IDs to indices
-        self.channel_inds = {}
-        for k, v in self.channel_groups.items():
-            self.channel_inds[k] = [channel_biomarkers.index(x) for x in v]
+        # # Convert channel IDs to indices
+        # self.channel_inds = {}
+        # for k, v in self.channel_groups.items():
+        #     self.channel_inds[k] = [channel_biomarkers.index(x) for x in v]
 
-    def load_pickle_file(self, region_id):
-        """Load the pickle file corresponding to a patient."""
-        file_path = os.path.join(self.root_dir, f'{region_id}.pkl')
+    def build_sample_index(self):
+        """Build and return a list of (region_id, sample_id) pairs."""
+        sample_index = []
+        for rid in self.region_ids:
+            file_path = os.path.join(self.root_dir, f'{rid}_processed.pkl')
+            with open(file_path, 'rb') as f:
+                data = pickle.load(f)
+                for sample_id in data.keys():
+                    if sample_id != "channel_biomarkers":
+                        sample_index.append((rid, sample_id))
+        return sample_index
+
+    def load_sample(self, region_id, sample_id):
+        """Load and return the sample corresponding to region_id and sample_id."""
+        file_path = os.path.join(self.root_dir, f'{region_id}_processed.pkl')
         with open(file_path, 'rb') as f:
-            return pickle.load(f)
+            data = pickle.load(f)
+            return data[sample_id], data['channel_biomarkers']
 
     def __len__(self):
         return len(self.sample_index)
 
     def __getitem__(self, idx):
-        patient_id, sample_id = self.sample_index[idx]
-        codex_img, caption = self.files[patient_id][sample_id]
+        region_id, sample_id = self.sample_index[idx]
+        codex_img, caption, bms = self.load_sample(region_id, sample_id)
 
-        # for now, select biomarker_expression + cell_types sections
+        # For now, select biomarker_expression + cell_types sections
         caption = caption['biomarker_expression'] + " " + caption['cell_types'] 
 
         # CODEX processing
         codex_img = torch.tensor(codex_img, dtype=torch.float32)
 
         # Create channel grouped images, including number of channels dict for ChannelViT
+        # get channel index (could be unique across studies)
+        for k, v in self.channel_groups.items():
+            channel_inds[k] = [bms.index(x) for x in v]
         grouped_imgs = {}
-        for k, v in self.channel_inds.items():
+        for k, v in channel_inds.items():
             grouped_imgs[k] = (codex_img[v, :, :], {'channels': torch.tensor([len(v)])})
 
         # Text processing
@@ -139,7 +151,7 @@ class MultiCodexTextDataset(Dataset):
             truncation=True
         )
 
-        # Return the processed sample
+        
         return {
             "codex": list(grouped_imgs.values()),
             "text": encoding['input_ids'].flatten(),

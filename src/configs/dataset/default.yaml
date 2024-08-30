@@ -1,6 +1,5 @@
 # dataset
 path: "data/my_dataset.pkl"
-file: "s255_c001_v001_r001_reg002_processed.pkl"
 batch_size: 4
 shuffle: True
 max_length: 128 # context window for BERT
