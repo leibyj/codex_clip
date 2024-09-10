@@ -11,9 +11,10 @@ from transformers import BertTokenizer
 import pickle
 from os.path import join
 import os
+import torch.nn.functional as F
 
-from models import CodexCLIP
-from data import CodexTextDataset, MultiCodexTextDataset
+from models import CodexCLIP_CVIT, CodexCLIP_CNN
+from data import MultiCodexTextDatasetSubset, MultiCodexTextDatasetFull
 from utils import MMCLIPLoss
 
 def setup_fsdp(rank, world_size):
@@ -24,6 +25,7 @@ def setup_fsdp(rank, world_size):
 
 def cleanup_fsdp():
     dist.destroy_process_group()
+
 
 def train(rank, cfg: DictConfig):
     n_gpus = torch.cuda.device_count()
@@ -48,27 +50,89 @@ def train(rank, cfg: DictConfig):
 
     # with open(join(workdir, f"data/{cfg.dataset.file}"), "rb") as f:
     #     demo_data = pickle.load(f)
+    sample_ids = ['s314_c002_v001_r002_reg004', 's314_c004_v001_r001_reg001',
+                    's255_c001_v001_r001_reg002', 's255_c001_v001_r001_reg022']
 
     tokenizer = BertTokenizer.from_pretrained(cfg.model.text_model)
-    train_data = MultiCodexTextDataset(cfg.dataset.path, ['s255_c001_v001_r001_reg002', 's255_c001_v001_r001_reg022'], tokenizer=tokenizer, max_len=cfg.dataset.max_length, **cfg.dataset.channel_groups)
+    # train_data = MultiCodexTextDataset(cfg.dataset.path, sample_ids, tokenizer=tokenizer, max_len=cfg.dataset.max_length, **cfg.dataset.channel_groups)
+
+    # Prep model and dataloader
+    if cfg.model.name == 'codex_text_cvit':
+        model = CodexCLIP_CVIT(
+            marker_groups=cfg.model.marker_groups, # for codex encoder model init
+            hf_model=cfg.model.text_model, # for CLIP model init
+            codex_dim=cfg.model.codex_dim, # for CLIP model init
+            text_dim=cfg.model.text_dim, # for CLIP model init
+            projection_dim=cfg.model.projection_dim, # for CLIP model init
+            shared_projection=cfg.model.shared_projection, # for CLIP model init
+            device=device, # for codex encoder model init
+            pt_path=cfg.model.pt_path # for codex encoder model init
+        )
+
+        train_data = MultiCodexTextDatasetSubset(cfg.dataset.path, sample_ids, tokenizer=tokenizer, max_len=cfg.dataset.max_length, **cfg.dataset.channel_groups)
+
+    elif cfg.model.name == 'codex_text_cnn':
+        model = CodexCLIP_CNN(
+            vocab=cfg.model.vocab,
+            embed_dim=cfg.model.codex_dim, # for codex encoder model init
+            nhead=cfg.model.nhead, # for codex encoder model init
+            num_layers=cfg.model.num_layers, # for codex encoder model init
+            hf_model=cfg.model.text_model, # for CLIP model init
+            codex_dim=cfg.model.codex_dim, # for CLIP model init
+            text_dim=cfg.model.text_dim, # for CLIP model init
+            projection_dim=cfg.model.projection_dim, # for CLIP model init
+            shared_projection=cfg.model.shared_projection # for CLIP model init
+        )
+
+        train_data = MultiCodexTextDatasetFull(cfg.dataset.path, sample_ids, tokenizer=tokenizer, max_len=cfg.dataset.max_length)
+
+    model = model.to(device)
+
+    def padded_collate_fn(batch):
+
+        # Find the maximum number of channels in the batch
+        max_channels = max(item['codex'].shape[0] for item in batch)
+
+        # Prepare lists for the padded codex images, texts, and attention masks
+        padded_codex_imgs = []
+        texts = []
+        attention_masks = []
+        channels = []
+
+        for item in batch:
+            codex_img = item['codex']
+            c, h, w = codex_img.shape
+
+            # Pad the codex image to match the max number of channels in the batch
+            if c < max_channels:
+                padding = (0, 0, 0, 0, 0, max_channels - c)  # Pad only on the channel dimension
+                padded_img = F.pad(codex_img, padding, mode='constant', value=0)
+            else:
+                padded_img = codex_img
+
+            padded_codex_imgs.append(padded_img)
+            texts.append(item['text'])
+            attention_masks.append(item['att_mask'])
+            channels.append(item['channels'])
+
+        # Stack tensors to create batch
+        padded_codex_imgs = torch.stack(padded_codex_imgs)
+        texts = torch.stack(texts)
+        attention_masks = torch.stack(attention_masks)
+
+        return {
+            "codex": padded_codex_imgs,
+            "text": texts,
+            "att_mask": attention_masks,
+            "channels": channels
+        }
 
     if n_gpus > 1:
         train_sampler = DistributedSampler(train_data, num_replicas=n_gpus, rank=rank)
-        train_loader = DataLoader(train_data, batch_size=cfg.dataset.batch_size, sampler=train_sampler)
+        train_loader = DataLoader(train_data, batch_size=cfg.dataset.batch_size, sampler=train_sampler, collate_fn=padded_collate_fn)
     else:
         train_loader = DataLoader(train_data, batch_size=cfg.dataset.batch_size, shuffle=cfg.dataset.shuffle)
 
-    # Prep model and optimizer
-    model = CodexCLIP(
-        marker_groups=cfg.model.marker_groups,
-        hf_model=cfg.model.text_model,
-        codex_dim=cfg.model.codex_dim,
-        text_dim=cfg.model.text_dim,
-        projection_dim=cfg.model.projection_dim,
-        shared_projection=cfg.model.shared_projection,
-        device=device,
-        pt_path=cfg.model.pt_path
-    ).to(device)
 
     # Wrap the model with FSDP instead of DDP
     if n_gpus > 1:
@@ -86,6 +150,20 @@ def train(rank, cfg: DictConfig):
     # Loss function
     criterion = MMCLIPLoss(temperature=cfg.loss.temperature).to(device)
 
+
+# Batch processing function based on dataset type
+    if isinstance(train_data, MultiCodexTextDatasetSubset):
+        def process_batch(batch):
+            # For Subset: Handle grouped images
+            batch['codex'] = [(img.to(device), {'channels': channels['channels'].to(device)}) for img, channels in batch['codex']]
+            return batch
+    else:
+        def process_batch(batch):
+            # For Full: Handle full images and channels
+            batch['codex'] = batch['codex'].to(device)
+            # batch['channels'] = [['PanCK', 'CD31', 'Vimentin', 'aSMA'] for i in batch['channels']]
+            return batch
+
     # Training loop
     for epoch in range(cfg.training.epochs):
         total_loss = 0
@@ -95,16 +173,17 @@ def train(rank, cfg: DictConfig):
             train_sampler.set_epoch(epoch)
 
         for batch in tqdm(train_loader) if rank == 0 else train_loader:
-            batch['codex'] = [(img.to(device), {'channels': channels['channels'].to(device)}) for img, channels in batch['codex']]
+            # batch['codex'] = [(img.to(device), {'channels': channels['channels'].to(device)}) for img, channels in batch['codex']]
+            batch = process_batch(batch)
             batch['text'] = batch['text'].to(device)
             batch['att_mask'] = batch['att_mask'].to(device)
 
             optimizer.zero_grad()
             embeddings = model(batch)
+
             loss = criterion(embeddings)
             loss.backward()
             optimizer.step()
-
             total_loss += loss.item()
 
         avg_loss = total_loss / len(train_loader)

@@ -1,0 +1,10 @@
+# model
+name: "codex_text_cnn"
+vocab: ['CD183', 'C1QC', 'SPP1', 'CD141', 'CD196', 'MASP2', 'EpCAM', 'C4d', 'TFAM', 'CD227', 'Perlecan', 'CD38', 'C3a', 'C3d', 'C9', 'ACE2', 'CollagenIV', 'Nestin', 'CD11c', 'CD55', 'C3aR', 'DAPI', 'CD68', 'CD11b', 'Clusterin', 'PD1', 'CD45', 'ICOS', 'aSMA', 'C5aR', 'CD46', 'CD21', 'CD35', 'FoxP3', 'VWF', 'GranzymeB', 'SC5b9', 'CD107a', 'bCatenin1', 'CD31', 'CD25', 'RORgammaT', 'CD197', 'CD14', 'CD15', 'CD45RA', 'Podoplanin', 'Vimentin', 'Siglec8', 'CD4', 'CD134', 'Tbet', 'HLA-DR', 'CD56', 'CD117', 'CD8', 'GATA3', 'PGP9.5', 'PDL1', 'PanCK', 'Ki67', 'CD34', 'CD20', 'CD3e', 'CD45RO'] # all possible channels in dataset
+nhead: 6
+num_layers: 12
+text_model: 'microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext'
+codex_dim: 768
+text_dim: 768
+projection_dim: 512
+shared_projection: False

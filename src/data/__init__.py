@@ -1,3 +1,3 @@
-from .dataset import CodexTextDataset, MultiCodexTextDataset
+from .dataset import MultiCodexTextDatasetSubset, MultiCodexTextDatasetFull
 
-__all__ = ['CodexTextDataset', 'MultiCodexTextDataset']
+__all__ = ['MultiCodexTextDatasetSubset', 'MultiCodexTextDatasetFull']

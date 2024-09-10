@@ -1,4 +1,4 @@
-from .clip_model import CodexCLIP
-from .encoders import CodexEncoder
+from .clip_model import CodexCLIP_CVIT, CodexCLIP_CNN
+from .encoders import CodexEncoder, CodexCNNTransformer
 
-__all__ = ['CodexCLIP', 'CodexEncoder']
+__all__ = ['CodexCLIP_CVIT', 'CodexCLIP_CNN' 'CodexEncoder', 'CodexCNNTransformer']

@@ -1,6 +1,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 class CodexEncoder(nn.Module):
     def __init__(self, marker_groups=0, hidden_dim=384, device='cpu', pt_path=''):
@@ -31,6 +32,7 @@ class CodexEncoder(nn.Module):
             nn.LayerNorm(hidden_dim)
         )
 
+
     def _load_channelvit_model(self, device, pt_path):
         # trouble getting it to load on correct device without adding that here
         model = torch.hub.load('insitro/ChannelViT', 'cpjump_cellpaint_bf_channelvit_small_p8_with_hcs_supervised', pretrained=False)
@@ -50,8 +52,135 @@ class CodexEncoder(nn.Module):
         # Reshape for self attention (needs 3D tensor: (sequence_length, batch_size, embed_dim))
         combined_cls = combined_cls.unsqueeze(0)  # Shape: (1, batch_size, embedding_dim)
 
-        # Perform self attention
+        # # Perform self attention
         attn_output, _ = self.self_attention(combined_cls, combined_cls, combined_cls)
         attn_output = self.attn_postprocess(attn_output)
 
         return attn_output.squeeze(0)
+
+class CNNbackbone(nn.Module):
+    def __init__(self, embed_dim):
+        """
+        Args:
+            embed_dim (int): The dimensionality of the output embedding.
+        """
+        super(CNNbackbone, self).__init__()
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1),
+            nn.LeakyReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.LeakyReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+        self.conv3 = nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.LeakyReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+        # Fully connected layer to create the final embedding of size embed_dim
+        self.fc = nn.Linear(128 * (256 // 8) * (256 // 8), embed_dim)
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.conv2(out)
+        out = self.conv3(out)
+        out = out.view(out.size(0), -1)
+        out = self.fc(out)
+        return out
+
+class ChannelEmbedding(nn.Module):
+    def __init__(self, embedding_dim, vocab):
+        """
+        Initialize the ChannelEmbedding module.
+        Args:
+            embedding_dim (int): Size of the embeddings for each channel.
+            vocab (list of str): List of all possible strings corresponding to channel values.
+        """
+        super(ChannelEmbedding, self).__init__()
+        self.embedding_dim = embedding_dim
+        self.channel_embedding = nn.Embedding(len(vocab), embedding_dim)
+        self.channel_to_idx = {v: i for i, v in enumerate(vocab)}
+
+    def forward(self, channel_names):
+        """
+        Args:
+            channel_names (list of list of str): Batch of lists of strings corresponding to c_i values for each sample
+        """
+        max_c = max(len(c) for c in channel_names)
+        batch_embeddings = []
+        padding_mask = []
+        
+        for channels in channel_names:
+            c_indices = [self.channel_to_idx[c] for c in channels]
+            c_indices_tensor = torch.tensor(c_indices, device=self.channel_embedding.weight.device)
+            embeddings = self.channel_embedding(c_indices_tensor)
+
+            padding_len = max_c - len(channels)
+            if padding_len > 0:
+                embeddings = F.pad(embeddings, (0, 0, 0, padding_len), value=0)
+
+            batch_embeddings.append(embeddings)
+            padding_mask.append([0] * len(channels) + [1] * padding_len)
+
+        batch_embeddings = torch.stack(batch_embeddings, dim=0)
+        padding_mask = torch.tensor(padding_mask, device=batch_embeddings.device, dtype=torch.bool)
+
+
+        return batch_embeddings, padding_mask
+
+class CodexCNNTransformer(nn.Module):
+    def __init__(self, vocab=[], embed_dim=768, nhead=6, num_layers=12):
+        """
+        Args:
+            vocab (list of str): List of all possible channel names.
+            embed_dim (int): Feature embedding size.
+            nhead (int): Number of attention heads.
+            num_layers (int): Number of transformer layers.
+        """
+        super(CodexCNNTransformer, self).__init__()
+        self.cnn = CNNbackbone(embed_dim)
+        self.channel_embedding = ChannelEmbedding(embed_dim, vocab)
+        self.cls_token = nn.Parameter(torch.randn(1, 1, embed_dim))  # start from random...?
+
+        encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=nhead)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+    def forward(self, samples, c_strings):
+        """
+        Args:
+            samples (Tensor): Batch of image tensors of shape (batch_size, c, 256, 256).
+            c_strings (list of list of str): Batch of lists of strings of channels for each sample
+        """
+        batch_size, num_channels, _, _ = samples.size()
+        
+        # Extract embeddings for each channel
+        cnn_embeddings = []
+        for i in range(num_channels):
+            chn_imgs = samples[:, i, :, :].unsqueeze(1) # (batch_size, 1, 256, 256)
+            cnn_embedding = self.cnn(chn_imgs)
+            cnn_embeddings.append(cnn_embedding)
+        cnn_embeddings = torch.stack(cnn_embeddings, dim=1)  # (batch_size, num_channels, embed_dim)
+        # print(cnn_embeddings.shape)
+
+        # channel embeddings and CLS token
+        channel_embeddings, padding_mask = self.channel_embedding(c_strings)
+        # print(channel_embeddings.shape)
+        x = cnn_embeddings + channel_embeddings  #  Add or concatenate?
+
+        batch_cls_token = self.cls_token.expand(batch_size, -1, -1)  # (batch_size, 1, embed_dim)
+        # print(batch_cls_token.shape)
+        x = torch.cat([batch_cls_token, x], dim=1) 
+
+        cls_padding_mask = torch.zeros(batch_size, 1, device=x.device, dtype=torch.bool)
+        # print(cls_padding_mask)
+        # print(cls_padding_mask.shape)
+        # print(padding_mask.shape)
+        padding_mask = torch.cat([cls_padding_mask, padding_mask], dim=1)  # (batch_size, num_channels + 1)
+
+        out = self.transformer_encoder(x.transpose(0, 1), src_key_padding_mask=padding_mask)  # (num_channels + 1, batch_size, embed_dim)
+
+        cls_embedding = out[0]  # (1, batch_size, embed_dim)
+        return cls_embedding.squeeze(0) 

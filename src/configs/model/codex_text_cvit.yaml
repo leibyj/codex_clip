@@ -1,6 +1,6 @@
 # model
-name: "codex_text"
-marker_groups: 2 #number of different groupings, must equal data config 'channel_groups'
+name: "codex_text_cvit"
+marker_groups: 2 # number of different groupings for CVIT, must equal data config 'channel_groups'
 text_model: 'microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext'
 codex_dim: 384
 text_dim: 768
