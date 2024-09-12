@@ -8,7 +8,9 @@ class BaseCodexCLIP(nn.Module):
                  codex_dim=384,
                  text_dim=768,
                  projection_dim=512,
-                 shared_projection=False):
+                 shared_projection=False,
+                 freeze_bert_layers=False,
+                 tune_bert_layers=None):
         """
         Args:
             hf_model (str): The Hugging Face model identifier for the text encoder.
@@ -21,9 +23,12 @@ class BaseCodexCLIP(nn.Module):
         
         # Initialize the text encoder
         self.text_encoder = BertModel.from_pretrained(hf_model)
-        for param in self.text_encoder.parameters():
-            param.requires_grad = True # edit this in the future...
-
+       
+        if freeze_bert_layers and tune_bert_layers is not None:
+            self._freeze_bert_layers(tune_bert_layers)
+        else:
+            for param in self.text_encoder.parameters():
+                param.requires_grad = True
         # Handle shared or independent projection layers
         if shared_projection:
             if codex_dim == text_dim:
@@ -45,15 +50,34 @@ class BaseCodexCLIP(nn.Module):
             # Independent projections
             self.codex_projection = nn.Linear(codex_dim, projection_dim)
             self.text_projection = nn.Linear(text_dim, projection_dim)
+        
+        self._initialize_weights()
 
+    def _initialize_weights(self):
+        """
+        Applies Xavier initialization to the linear layers.
+        """
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+    
+    def _freeze_bert_layers(self, tune_bert_layers):
+        """
+        Args:
+            tune_bert_layers (list): List of BERT layers to keep trainable. All others will be frozen.
+        """
+        for name, param in self.text_encoder.named_parameters():
+            # Extract the layer index from parameter name
+            if any(f'layer.{i}' in name for i in tune_bert_layers):
+                param.requires_grad = True  # Keep trainable
+            else:
+                param.requires_grad = False  # Freeze
+                
     def forward(self, data, codex_features):
         # Codex projection
         image_features = self.codex_projection(codex_features)
-
-        # Text encoder (use CLS token output)
-        # text_features = self.text_projection(
-        #     self.text_encoder(text['input_ids'], attention_mask=text['attention_mask']).last_hidden_state[:, 0, :]
-        # )
 
         text_features = self.text_projection(self.text_encoder(data['text'], data['att_mask']).last_hidden_state[:, 0, :])  # Use the CLS token output
 

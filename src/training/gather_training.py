@@ -3,7 +3,8 @@ from omegaconf import DictConfig, OmegaConf
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, CPUOffload, ShardingStrategy
+# from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, CPUOffload, ShardingStrategy
+from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed.nn.functional as dist_fn
 from torch import distributed as dist
 from tqdm import tqdm
@@ -15,20 +16,23 @@ import os
 import torch.nn.functional as F
 
 from models import CodexCLIP_CVIT, CodexCLIP_CNN
-from data import MultiCodexTextDatasetSubset, MultiCodexTextDatasetFull
+from data import MultiCodexTextDatasetSubset, MultiCodexTextDatasetFull, padded_collate_fn
 from utils import MMCLIPLoss
 
-def setup_fsdp(rank, world_size):
+import warnings
+warnings.filterwarnings("ignore")
+
+def setup_ddp(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
     torch.cuda.set_device(rank)
 
-def cleanup_fsdp():
+def cleanup_ddp():
     dist.destroy_process_group()
 
 def log_hydra_config_to_wandb(cfg):
-    config_dict = OmegaConf.to_container(cfg, resolve=True)  # resolve=True ensures that interpolations are resolved
+    config_dict = OmegaConf.to_container(cfg, resolve=True) 
     
     wandb.config.update(config_dict, allow_val_change=True)
 
@@ -39,7 +43,7 @@ def gather_embeddings(embeddings_dict, world_size):
         world_size (int): Total number of GPUs involved in training.
     """
     gathered_embeddings_dict = {}
-    # Loop through each modality in the dictionary
+    # Loop through each modality in the dictionary returned from model
     for modality, embeddings in embeddings_dict.items():
         gathered_embeddings = dist_fn.all_gather(embeddings)
         gathered_embeddings = torch.cat(gathered_embeddings, dim=0)
@@ -47,13 +51,30 @@ def gather_embeddings(embeddings_dict, world_size):
 
     return gathered_embeddings_dict
 
+def z_score_normalize(img, clip_range=None):
+    mean = img.mean(dim=(1, 2), keepdim=True)
+    std = img.std(dim=(1, 2), keepdim=True)
+    
+    normalized_img = (img - mean) / (std + 1e-6) 
+    
+    if clip_range is not None:
+        normalized_img = torch.clamp(normalized_img, clip_range[0], clip_range[1])
+
+    return normalized_img
+
+def min_max_normalize(img):
+    min_val = torch.amin(img, dim=(1, 2), keepdim=True)
+    max_val = torch.amax(img, dim=(1, 2), keepdim=True)
+    
+    normalized_img = (img - min_val) / (max_val - min_val + 1e-6)  
+
+    return normalized_img
 
 def train(rank, cfg: DictConfig):
     n_gpus = torch.cuda.device_count()
     
-    # Setup FSDP if more than one GPU is available
     if n_gpus > 1:
-        setup_fsdp(rank, n_gpus)
+        setup_ddp(rank, n_gpus)
         device = torch.device("cuda", rank)
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -67,16 +88,12 @@ def train(rank, cfg: DictConfig):
 
     print(f'Running on: {device}')
 
-    # Load data
-    # data = cfg.dataset.path
-
-    # with open(join(workdir, f"data/{cfg.dataset.file}"), "rb") as f:
-    #     demo_data = pickle.load(f)
     sample_ids = ['s314_c002_v001_r002_reg004', 's314_c004_v001_r001_reg001',
                     's255_c001_v001_r001_reg002', 's255_c001_v001_r001_reg022']
 
     tokenizer = BertTokenizer.from_pretrained(cfg.model.text_model)
-    # train_data = MultiCodexTextDataset(cfg.dataset.path, sample_ids, tokenizer=tokenizer, max_len=cfg.dataset.max_length, **cfg.dataset.channel_groups)
+
+    # transform = min_max_normalize()
 
     # Prep model and dataloader
     if cfg.model.name == 'codex_text_cvit':
@@ -103,87 +120,46 @@ def train(rank, cfg: DictConfig):
             codex_dim=cfg.model.codex_dim, # for CLIP model init
             text_dim=cfg.model.text_dim, # for CLIP model init
             projection_dim=cfg.model.projection_dim, # for CLIP model init
-            shared_projection=cfg.model.shared_projection # for CLIP model init
+            shared_projection=cfg.model.shared_projection, # for CLIP model init
+            freeze_bert_layers=True, # for CLIP model init
+            tune_bert_layers=[10, 11] # for CLIP model init
         )
 
-        train_data = MultiCodexTextDatasetFull(cfg.dataset.path, sample_ids, tokenizer=tokenizer, max_len=cfg.dataset.max_length)
+        train_data = MultiCodexTextDatasetFull(cfg.dataset.path, sample_ids, tokenizer=tokenizer, max_len=cfg.dataset.max_length, transform=min_max_normalize)
 
     model = model.to(device)
 
-    def padded_collate_fn(batch):
-
-        # Find the maximum number of channels in the batch
-        max_channels = max(item['codex'].shape[0] for item in batch)
-
-        # Prepare lists for the padded codex images, texts, and attention masks
-        padded_codex_imgs = []
-        texts = []
-        attention_masks = []
-        channels = []
-
-        for item in batch:
-            codex_img = item['codex']
-            c, h, w = codex_img.shape
-
-            # Pad the codex image to match the max number of channels in the batch
-            if c < max_channels:
-                padding = (0, 0, 0, 0, 0, max_channels - c)  # Pad only on the channel dimension
-                padded_img = F.pad(codex_img, padding, mode='constant', value=0)
-            else:
-                padded_img = codex_img
-
-            padded_codex_imgs.append(padded_img)
-            texts.append(item['text'])
-            attention_masks.append(item['att_mask'])
-            channels.append(item['channels'])
-
-        # Stack tensors to create batch
-        padded_codex_imgs = torch.stack(padded_codex_imgs)
-        texts = torch.stack(texts)
-        attention_masks = torch.stack(attention_masks)
-
-        return {
-            "codex": padded_codex_imgs,
-            "text": texts,
-            "att_mask": attention_masks,
-            "channels": channels
-        }
-
     if n_gpus > 1:
         train_sampler = DistributedSampler(train_data, num_replicas=n_gpus, rank=rank)
-        train_loader = DataLoader(train_data, batch_size=cfg.dataset.batch_size, sampler=train_sampler, collate_fn=padded_collate_fn)
+        train_loader = DataLoader(train_data, batch_size=cfg.dataset.batch_size, num_workers = 16, sampler=train_sampler, collate_fn=padded_collate_fn, persistent_workers=True)
     else:
         train_loader = DataLoader(train_data, batch_size=cfg.dataset.batch_size, shuffle=cfg.dataset.shuffle)
 
-
-    # Wrap the model with FSDP instead of DDP
     if n_gpus > 1:
-        model = FSDP(
-            model,
-            cpu_offload=CPUOffload(offload_params=True),  # Offload parameters to CPU if needed
-            sharding_strategy=ShardingStrategy.FULL_SHARD,  # Fully sharded mode
-        )
+        model = DDP(model, device_ids=[rank], output_device=rank)
 
     if cfg.training.optimizer == "adam":
-        optimizer = torch.optim.Adam(model.parameters(), lr=cfg.training.learning_rate)
+        # optimizer = torch.optim.Adam(model.parameters(), lr=cfg.training.learning_rate)
+        optimizer = torch.optim.Adam([
+            {'params': model.module.text_encoder.parameters(), 'lr': cfg.training.text_lr},  # Text encoder parameters
+            {'params': model.module.codex_encoder.parameters(), 'lr': cfg.training.codex_lr},  # CODEX encoder parameters
+            {'params': model.module.codex_projection.parameters(), 'lr': cfg.training.codex_lr},  # CODEX projection layer
+            {'params': model.module.text_projection.parameters(), 'lr': cfg.training.text_lr},  # Text projection layer
+        ])
     elif cfg.training.optimizer == "sgd":
         optimizer = torch.optim.SGD(model.parameters(), lr=cfg.training.learning_rate)
     
     # Loss function
     criterion = MMCLIPLoss(temperature=cfg.loss.temperature).to(device)
 
-
-# Batch processing function based on dataset type
+    # Get codex data onto device, Dataset dependent
     if isinstance(train_data, MultiCodexTextDatasetSubset):
         def process_batch(batch):
-            # For Subset: Handle grouped images
             batch['codex'] = [(img.to(device), {'channels': channels['channels'].to(device)}) for img, channels in batch['codex']]
             return batch
     else:
         def process_batch(batch):
-            # For Full: Handle full images and channels
             batch['codex'] = batch['codex'].to(device)
-            # batch['channels'] = [['PanCK', 'CD31', 'Vimentin', 'aSMA'] for i in batch['channels']]
             return batch
     
     # Training loop
@@ -204,16 +180,28 @@ def train(rank, cfg: DictConfig):
 
             if n_gpus > 1:
                 embeddings = gather_embeddings(embeddings, n_gpus)
+                # if rank == 0:
+                #     for modality in embeddings.keys():
+                #         print(f"{modality} mean embedding {embeddings[modality].mean()}")
 
             loss = criterion(embeddings)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
+
             total_loss += loss.item()
+
+            
+            if rank == 0:
+                wandb.log({"batch_loss": loss.item()})
+                print(f"batch_loss = {loss.item()}")
+            
+
 
         avg_loss = total_loss / len(train_loader)
         if rank == 0:
-            print(f'Epoch {epoch+1}/{cfg.training.epochs}, Loss: {avg_loss}')
-            wandb.log({"loss": avg_loss})
+            wandb.log({"epoch_loss": avg_loss})
+            print(f'Epoch {epoch+1}/{cfg.training.epochs}, Avg Loss: {avg_loss}')
 
 
     if rank == 0:

@@ -13,9 +13,6 @@ class MMCLIPLoss(nn.Module):
         Args:
             embeddings_dict (dict): A dictionary where keys are modality names and values are 
                                     the corresponding embeddings (Tensor) of shape (batch_size, embedding_dim).
-                                    
-        Returns:
-            torch.Tensor: The average CLIP loss over all pairwise modality combinations.
         """
         # All pairwise combos
         modality_pairs = list(combinations(emb_dict.keys(), 2))
@@ -46,5 +43,5 @@ class MMCLIPLoss(nn.Module):
             total_loss += (loss_a_to_b + loss_b_to_a) / 2
 
         # Average again?
-        final_loss = total_loss / num_pairs
-        return final_loss
+        # final_loss = total_loss / num_pairs
+        return total_loss

@@ -8,5 +8,5 @@ defaults:
 
 wandb:
   project_name: 'codex-text'
-  run_name: 'test_run1'
+  run_name: 'test_run_resnet'
 

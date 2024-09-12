@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.models as models
 
 class CodexEncoder(nn.Module):
     def __init__(self, marker_groups=0, hidden_dim=384, device='cpu', pt_path=''):
@@ -57,6 +58,31 @@ class CodexEncoder(nn.Module):
         attn_output = self.attn_postprocess(attn_output)
 
         return attn_output.squeeze(0)
+
+
+class ResNetbackbone(nn.Module):
+    def __init__(self, embed_dim):
+        """
+        Args:
+            embed_dim (int): The dimensionality of the output embedding.
+        """
+        super(ResNetbackbone, self).__init__()
+        # Load the pretrained ResNet
+        resnet = models.resnet18(pretrained=True)
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.conv1.weight.data = resnet.conv1.weight.data.mean(dim=1, keepdim=True)
+        resnet.conv1 = self.conv1
+        
+        self.resnet = nn.Sequential(*list(resnet.children())[:-2])
+        
+        self.fc = nn.Linear(resnet.fc.in_features, embed_dim)
+
+    def forward(self, x):
+        out = self.resnet(x)
+        out = nn.functional.adaptive_avg_pool2d(out, (1, 1)) 
+        out = out.view(out.size(0), -1)  
+        out = self.fc(out) 
+        return out
 
 class CNNbackbone(nn.Module):
     def __init__(self, embed_dim):
@@ -141,12 +167,26 @@ class CodexCNNTransformer(nn.Module):
             num_layers (int): Number of transformer layers.
         """
         super(CodexCNNTransformer, self).__init__()
-        self.cnn = CNNbackbone(embed_dim)
+        # self.cnn = CNNbackbone(embed_dim)
+        self.cnn = ResNetbackbone(embed_dim)
         self.channel_embedding = ChannelEmbedding(embed_dim, vocab)
         self.cls_token = nn.Parameter(torch.randn(1, 1, embed_dim))  # start from random...?
 
         encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=nhead)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
+            elif isinstance(m, nn.Embedding):
+                nn.init.normal_(m.weight, mean=0, std=0.02)
 
     def forward(self, samples, c_strings):
         """
@@ -156,14 +196,11 @@ class CodexCNNTransformer(nn.Module):
         """
         batch_size, num_channels, _, _ = samples.size()
         
-        # Extract embeddings for each channel
-        cnn_embeddings = []
-        for i in range(num_channels):
-            chn_imgs = samples[:, i, :, :].unsqueeze(1) # (batch_size, 1, 256, 256)
-            cnn_embedding = self.cnn(chn_imgs)
-            cnn_embeddings.append(cnn_embedding)
-        cnn_embeddings = torch.stack(cnn_embeddings, dim=1)  # (batch_size, num_channels, embed_dim)
-        # print(cnn_embeddings.shape)
+        chn_imgs = samples.view(batch_size * num_channels, 1, 256, 256)
+    
+        cnn_embeddings = self.cnn(chn_imgs)
+        cnn_embeddings = cnn_embeddings.view(batch_size, num_channels, -1)  # Reshape back to (batch_size, num_channels, embed_dim)
+
 
         # channel embeddings and CLS token
         channel_embeddings, padding_mask = self.channel_embedding(c_strings)
