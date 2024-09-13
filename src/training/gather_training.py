@@ -208,7 +208,7 @@ def train(rank, cfg: DictConfig):
         wandb.finish()
 
     if n_gpus > 1:
-        cleanup_fsdp()
+        cleanup_ddp()
 
 @hydra.main(config_path="../configs", config_name="config")
 def main(cfg: DictConfig):
