@@ -214,7 +214,7 @@ class CodexCNNTransformer(nn.Module):
         return cls_embedding.squeeze(0) 
 
 class CodexCNNTransformerIBOT(nn.Module):
-    def __init__(self, vocab=[], embed_dim=768, nhead=6, num_layers=12, mask_ratio=0.75, teacher_temperature=0.07, student_temperature=0.1):
+    def __init__(self, vocab=[], embed_dim=768, nhead=6, num_layers=12, mask_ratio=0.75, teacher_temperature=0.07, student_temperature=0.1, momentum=0.996):
         """
         Args:
             vocab (list of str): List of all possible channel names.
@@ -223,6 +223,7 @@ class CodexCNNTransformerIBOT(nn.Module):
             num_layers (int): Number of transformer layers.
             mask_ratio (float): Ratio of patches to mask in each input image.
             teacher_temperature (float): Temperature parameter for teacher network's softmax.
+            student_temperature (float): Temperature parameter for student network's softmax.
         """
         super(CodexCNNTransformerIBOT, self).__init__()
         self.cnn = ResNetbackbone(embed_dim)
@@ -231,6 +232,7 @@ class CodexCNNTransformerIBOT(nn.Module):
         self.mask_ratio = mask_ratio
         self.teacher_temperature = teacher_temperature
         self.student_temperature = student_temperature
+        self.momentum = momentum
 
         # student
         student_encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=nhead)
@@ -299,6 +301,9 @@ class CodexCNNTransformerIBOT(nn.Module):
         channel_embeddings, padding_mask = self.channel_embedding(c_strings)
         combined_embeddings = cnn_embeddings + channel_embeddings
         combined_masked, masked_indices, visible_indices = self.random_masking(combined_embeddings, self.mask_ratio)
+
+
+
         batch_cls_token = self.cls_token.expand(batch_size, -1, -1)  # (batch_size, 1, embed_dim)
         x = torch.cat([batch_cls_token, combined_masked], dim=1)  # (batch_size, num_patches + 1, embed_dim)
         cls_padding_mask = torch.zeros(batch_size, 1, device=x.device, dtype=torch.bool)
@@ -309,36 +314,51 @@ class CodexCNNTransformerIBOT(nn.Module):
         student_pred = self.student_projection(out.transpose(0, 1))  # (batch_size, num_patches + 1, embed_dim)
 
         # teacher
+        # copy unmasked view
+        combined_embeddings_teacher = combined_embeddings.clone().detach()
+        x_teacher = torch.cat([batch_cls_token, combined_embeddings_teacher], dim=1)
         with torch.no_grad():
-            teacher_out = self.teacher(x.transpose(0, 1), src_key_padding_mask=padding_mask)
+            teacher_out = self.teacher(x_teacher.transpose(0, 1), src_key_padding_mask=padding_mask)
             teacher_pred = self.teacher_projection(teacher_out.transpose(0, 1))  # (batch_size, num_patches + 1, embed_dim)
         
         student_pred = F.normalize(student_pred, dim=-1)
         teacher_pred = F.normalize(teacher_pred, dim=-1)
 
-        loss = self.compute_ibot_loss(student_pred, teacher_pred, masked_indices)
-        return loss
+        mim_loss = self.compute_mim_loss(student_pred, teacher_pred, masked_indices)
+        cls_loss = self.compute_cls_loss(student_pred, teacher_pred)
+        return mim_loss + cls_loss
 
-
-    def compute_ibot_loss(self, student_pred, teacher_pred, masked_indices):
+    def compute_mim_loss(self, student_pred, teacher_pred, masked_indices):
         batch_size, num_patches, _ = student_pred.size()
 
-        # Select only the masked tokens
+        #MIM loss
         student_masked_pred = torch.stack([student_pred[i, masked_indices[i]] for i in range(batch_size)])
         teacher_masked_pred = torch.stack([teacher_pred[i, masked_indices[i]] for i in range(batch_size)])
 
-        # Apply temperature scaling and compute probabilities
         teacher_probs = F.softmax(teacher_masked_pred / self.teacher_temperature, dim=-1)
         student_log_probs = F.log_softmax(student_masked_pred / self.student_temperature, dim=-1)
 
-        # Compute KL divergence loss
         loss_fn = nn.KLDivLoss(reduction='batchmean')
         loss = loss_fn(student_log_probs, teacher_probs)
 
         return loss
 
+    def compute_cls_loss(self, student_pred, teacher_pred):
+        student_cls = student_pred[:, 0, :]
+        teacher_cls = teacher_pred[:, 0, :]
 
-    def update_teacher(self, momentum=0.996):
+        student_cls = F.normalize(student_cls, dim=-1)
+        teacher_cls = F.normalize(teacher_cls, dim=-1)
+
+        student_probs = F.softmax(student_cls, dim=-1)
+        teacher_probs = F.softmax(teacher_cls, dim=-1)
+
+        loss = F.cross_entropy(student_probs, teacher_probs)
+
+        return loss
+
+    def update_teacher(self):
+        momentum = self.momentum
         for param_s, param_t in zip(self.transformer_encoder.parameters(), self.teacher.parameters()):
             param_t.data = momentum * param_t.data + (1 - momentum) * param_s.data
 

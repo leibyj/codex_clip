@@ -72,7 +72,9 @@ def train(rank, cfg: DictConfig):
         nhead=cfg.model.nhead, 
         num_layers=cfg.model.num_layers, 
         mask_ratio=cfg.model.mask_ratio,
-        teacher_temperature=cfg.model.teacher_temperature
+        teacher_temperature=cfg.model.teacher_temperature,
+        student_temperature=cfg.model.student_temperature,
+        momentum=cfg.model.momentum
     )
     
     # Set up the dataset

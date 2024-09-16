@@ -5,5 +5,7 @@ nhead: 6
 num_layers: 6
 codex_dim: 768
 mask_ratio: 0.5  # Ratio of masked patches
-teacher_temperature: 0.07  # Teacher temperature for distillation
+teacher_temperature: 0.07  
+student_temperature: 0.1  
+momentum: 0.996 # momemntum for teacher updates
 text_model: 'microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext'
