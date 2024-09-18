@@ -18,3 +18,10 @@ def min_max_normalize(img):
     normalized_img = (img - min_val) / (max_val - min_val + 1e-6)  
 
     return normalized_img
+
+class MinMaxNormalize:
+    def __call__(self, tensor):
+        min_val = tensor.min()
+        max_val = tensor.max()
+        normalized_tensor = (tensor - min_val) / (max_val - min_val + 1e-6)
+        return normalized_tensor

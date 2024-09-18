@@ -13,10 +13,11 @@ import pickle
 from os.path import join
 import os
 import torch.nn.functional as F
-
+from torch.cuda.amp import GradScaler, autocast
+from torchvision import transforms
 from models import CodexCNNTransformerIBOT
 from data import MultiCodexTextDatasetSubset, MultiCodexTextDatasetFull, padded_collate_fn
-from utils import z_score_normalize, min_max_normalize
+from utils import z_score_normalize, min_max_normalize, MinMaxNormalize
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -41,6 +42,12 @@ def gather_embeddings(embeddings_dict, world_size):
         gathered_embeddings = torch.cat(gathered_embeddings, dim=0)
         gathered_embeddings_dict[modality] = gathered_embeddings
     return gathered_embeddings_dict
+
+data_transforms = transforms.Compose([
+    transforms.RandomResizedCrop(256),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2),
+    MinMaxNormalize(), 
+])
 
 def train(rank, cfg: DictConfig):
     n_gpus = torch.cuda.device_count()
@@ -78,20 +85,22 @@ def train(rank, cfg: DictConfig):
     )
     
     # Set up the dataset
-    train_data = MultiCodexTextDatasetFull(cfg.dataset.path, sample_ids, tokenizer=tokenizer, max_len=cfg.dataset.max_length, transform=min_max_normalize)
+    train_data = MultiCodexTextDatasetFull(cfg.dataset.path, sample_ids, tokenizer=tokenizer, max_len=cfg.dataset.max_length, transform=data_transforms)
 
     model = model.to(device)
 
     if n_gpus > 1:
         train_sampler = DistributedSampler(train_data, num_replicas=n_gpus, rank=rank)
-        train_loader = DataLoader(train_data, batch_size=cfg.dataset.batch_size, num_workers=16, sampler=train_sampler, collate_fn=padded_collate_fn, persistent_workers=True)
+        train_loader = DataLoader(train_data, batch_size=cfg.dataset.batch_size, num_workers=16, sampler=train_sampler, collate_fn=padded_collate_fn, persistent_workers=True, pin_memory=True)
     else:
         train_loader = DataLoader(train_data, batch_size=cfg.dataset.batch_size, shuffle=cfg.dataset.shuffle)
 
     if n_gpus > 1:
         model = DDP(model, device_ids=[rank], output_device=rank)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.training.learning_rate)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.training.learning_rate, weight_decay=cfg.training.weight_decay)
+    scaler = GradScaler()  # For mixed precision training
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.training.epochs)
 
     # Training loop
     for epoch in range(cfg.training.epochs):
@@ -107,12 +116,18 @@ def train(rank, cfg: DictConfig):
             # Process the batch for CodexCNNTransformerIBOT
             batch['codex'] = batch['codex'].to(device)
 
-            # Forward pass
-            loss = model(batch['codex'], batch['channels'])
+            # Mixed precision training
+            with autocast():
+                # Forward pass
+                loss, cls_loss, mim_loss = model(batch['codex'], batch['channels'])
 
-            # Backpropagation
-            loss.backward()
-            optimizer.step()
+            # Backpropagation https://pytorch.org/docs/main/notes/amp_examples.html#gradient-clipping
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.training.max_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+
             if hasattr(model, 'module'):
                 model.module.update_teacher()
             else:
@@ -122,14 +137,28 @@ def train(rank, cfg: DictConfig):
             total_loss += loss.item()
 
             if rank == 0:
-                wandb.log({"batch_loss": loss.item()})
-                print(f"batch_loss = {loss.item()}")
+                wandb.log({"batch_loss": loss.item(),
+                           "CLS_loss": cls_loss.item(),
+                           "MIM_loss": mim_loss.item()})
+                print(f"batch_loss = {loss.item()}, CLS_loss = {cls_loss.item()}, MIM_loss = {mim_loss.item()}")
 
         avg_loss = total_loss / len(train_loader)
+        scheduler.step()
+
         if rank == 0:
             wandb.log({"epoch_loss": avg_loss})
-            print(f'Epoch {epoch+1}/{cfg.training.epochs}, Avg Loss: {avg_loss}')
+            print(f'Epoch {epoch+1}/{cfg.training.epochs}, Avg Loss: {avg_loss}, LR: {scheduler.get_last_lr()[0]}')
 
+    # save pretrained state_dict
+    if rank == 0:
+        save_dir = '/project/zhihuanglab/jleiby/codex_clip/pretrained_encoder_weights'  # Replace with your desired path
+        save_path = os.path.join(save_dir, 'codex_cnn_transformer_ibot_pretrained.pth')
+        if hasattr(model, 'module'):
+            torch.save(model.module.state_dict(), save_path)
+        else:
+            # Save the state_dict of the model
+            torch.save(model.state_dict(), save_path)
+        print(f"Model saved successfully at {save_path}.")
     if rank == 0:
         wandb.finish()
 

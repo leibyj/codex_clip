@@ -105,6 +105,7 @@ class MultiCodexTextDatasetFull(BaseCodexTextDataset):
             region_ids (list of str): List of region IDs to load.
             tokenizer (transformers.PreTrainedTokenizer): HF tokenizer
             max_len (int): context length for text data.
+            transform (callable, optional): Optional transform to be applied on a sample.
         """
         super().__init__(root_dir, region_ids, tokenizer, max_len)
         self.transform = transform
@@ -117,7 +118,8 @@ class MultiCodexTextDatasetFull(BaseCodexTextDataset):
         caption = dat['text']['biomarker_expression'] + " " + dat['text']['cell_types']
 
         if self.transform is not None:
-            codex_img = self.transform(codex_img)
+            # Apply the transform to each channel separately
+            codex_img = torch.stack([self.transform(c.unsqueeze(0)).squeeze(0) for c in codex_img])
 
         # Text processing
         input_ids, attention_mask = self.text_processing(caption)

@@ -209,7 +209,7 @@ class CodexCNNTransformer(nn.Module):
         padding_mask = torch.cat([cls_padding_mask, padding_mask], dim=1)  # (batch_size, num_channels + 1)
 
         out = self.transformer_encoder(x.transpose(0, 1), src_key_padding_mask=padding_mask)  # (num_channels + 1, batch_size, embed_dim)
-
+        # TODO: CLS embedding as global representation or (attention) pooling of channel embeddings?? MAE paper used mean of all patch embeddings
         cls_embedding = out[0]  # (1, batch_size, embed_dim)
         return cls_embedding.squeeze(0) 
 
@@ -301,9 +301,6 @@ class CodexCNNTransformerIBOT(nn.Module):
         channel_embeddings, padding_mask = self.channel_embedding(c_strings)
         combined_embeddings = cnn_embeddings + channel_embeddings
         combined_masked, masked_indices, visible_indices = self.random_masking(combined_embeddings, self.mask_ratio)
-
-
-
         batch_cls_token = self.cls_token.expand(batch_size, -1, -1)  # (batch_size, 1, embed_dim)
         x = torch.cat([batch_cls_token, combined_masked], dim=1)  # (batch_size, num_patches + 1, embed_dim)
         cls_padding_mask = torch.zeros(batch_size, 1, device=x.device, dtype=torch.bool)
@@ -326,12 +323,11 @@ class CodexCNNTransformerIBOT(nn.Module):
 
         mim_loss = self.compute_mim_loss(student_pred, teacher_pred, masked_indices)
         cls_loss = self.compute_cls_loss(student_pred, teacher_pred)
-        return mim_loss + cls_loss
+        return mim_loss + cls_loss, cls_loss, mim_loss
 
     def compute_mim_loss(self, student_pred, teacher_pred, masked_indices):
         batch_size, num_patches, _ = student_pred.size()
 
-        #MIM loss
         student_masked_pred = torch.stack([student_pred[i, masked_indices[i]] for i in range(batch_size)])
         teacher_masked_pred = torch.stack([teacher_pred[i, masked_indices[i]] for i in range(batch_size)])
 
@@ -343,17 +339,17 @@ class CodexCNNTransformerIBOT(nn.Module):
 
         return loss
 
-    def compute_cls_loss(self, student_pred, teacher_pred):
+    def compute_cls_loss(self, student_pred, teacher_pred): # TODO: KL divergence? MSE? Cross entropy?
         student_cls = student_pred[:, 0, :]
         teacher_cls = teacher_pred[:, 0, :]
 
-        student_cls = F.normalize(student_cls, dim=-1)
-        teacher_cls = F.normalize(teacher_cls, dim=-1)
+        # Normalize the predictions
+        student_log_probs = F.log_softmax(student_cls / self.student_temperature, dim=-1)
+        teacher_probs = F.softmax(teacher_cls / self.teacher_temperature, dim=-1)
 
-        student_probs = F.softmax(student_cls, dim=-1)
-        teacher_probs = F.softmax(teacher_cls, dim=-1)
-
-        loss = F.cross_entropy(student_probs, teacher_probs)
+        # Compute KL divergence loss
+        loss_fn = nn.KLDivLoss(reduction='batchmean')
+        loss = loss_fn(student_log_probs, teacher_probs)
 
         return loss
 

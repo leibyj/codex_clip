@@ -7,6 +7,11 @@
 # hydra
 outputs/
 
+# LSF scripts and logs
+logs/
+pretrained_encoder_weights/
+*.sh
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
