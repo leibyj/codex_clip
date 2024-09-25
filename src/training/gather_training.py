@@ -14,11 +14,12 @@ import pickle
 from os.path import join
 import os
 import torch.nn.functional as F
+from torch.cuda.amp import GradScaler, autocast
 
-from models import CodexCLIP_CVIT, CodexCLIP_CNN
+from models import CodexCLIP_CVIT, CodexCLIP_CNN, CodexCNNTransformerIBOT
 from data import MultiCodexTextDatasetSubset, MultiCodexTextDatasetFull, padded_collate_fn
 from utils import MMCLIPLoss
-
+ 
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -88,8 +89,10 @@ def train(rank, cfg: DictConfig):
 
     print(f'Running on: {device}')
 
-    sample_ids = ['s314_c002_v001_r002_reg004', 's314_c004_v001_r001_reg001',
-                    's255_c001_v001_r001_reg002', 's255_c001_v001_r001_reg022']
+    # sample_ids = ['s314_c002_v001_r002_reg004', 's314_c004_v001_r001_reg001',
+    #                 's255_c001_v001_r001_reg002', 's255_c001_v001_r001_reg022']
+
+    sample_ids = ['s314_c002_v001_r002_reg004', 's314_c004_v001_r001_reg001']
 
     tokenizer = BertTokenizer.from_pretrained(cfg.model.text_model)
 
@@ -124,6 +127,13 @@ def train(rank, cfg: DictConfig):
             freeze_bert_layers=True, # for CLIP model init
             tune_bert_layers=[10, 11] # for CLIP model init
         )
+        # Load weights from CodexCNNTransformerIBOT into CodexCNNTransformer
+        codex_cnn_transformer = model.codex_encoder  
+        ibot_weights = torch.load('/project/zhihuanglab/jleiby/codex_clip/pretrained_encoder_weights/codex_cnn_transformer_ibot_pretrained.pth', map_location=device)
+        codex_cnn_transformer_state_dict = codex_cnn_transformer.state_dict()
+        filtered_ibot_weights = {k: v for k, v in ibot_weights.items() if k in codex_cnn_transformer_state_dict}
+        codex_cnn_transformer_state_dict.update(filtered_ibot_weights)
+        codex_cnn_transformer.load_state_dict(codex_cnn_transformer_state_dict)
 
         train_data = MultiCodexTextDatasetFull(cfg.dataset.path, sample_ids, tokenizer=tokenizer, max_len=cfg.dataset.max_length, transform=min_max_normalize)
 
@@ -140,11 +150,11 @@ def train(rank, cfg: DictConfig):
 
     if cfg.training.optimizer == "adam":
         # optimizer = torch.optim.Adam(model.parameters(), lr=cfg.training.learning_rate)
-        optimizer = torch.optim.Adam([
-            {'params': model.module.text_encoder.parameters(), 'lr': cfg.training.text_lr},  # Text encoder parameters
-            {'params': model.module.codex_encoder.parameters(), 'lr': cfg.training.codex_lr},  # CODEX encoder parameters
-            {'params': model.module.codex_projection.parameters(), 'lr': cfg.training.codex_lr},  # CODEX projection layer
-            {'params': model.module.text_projection.parameters(), 'lr': cfg.training.text_lr},  # Text projection layer
+        optimizer = torch.optim.AdamW([
+            {'params': model.module.text_encoder.parameters(), 'lr': cfg.training.text_lr, 'weight_decay': cfg.training.weight_decay},  # Text encoder parameters
+            {'params': model.module.codex_encoder.parameters(), 'lr': cfg.training.codex_lr, 'weight_decay': cfg.training.weight_decay},  # CODEX encoder parameters
+            {'params': model.module.codex_projection.parameters(), 'lr': cfg.training.codex_lr, 'weight_decay': cfg.training.weight_decay},  # CODEX projection layer
+            {'params': model.module.text_projection.parameters(), 'lr': cfg.training.text_lr, 'weight_decay': cfg.training.weight_decay},  # Text projection layer
         ])
     elif cfg.training.optimizer == "sgd":
         optimizer = torch.optim.SGD(model.parameters(), lr=cfg.training.learning_rate)
@@ -162,6 +172,8 @@ def train(rank, cfg: DictConfig):
             batch['codex'] = batch['codex'].to(device)
             return batch
     
+    scaler = GradScaler()  
+
     # Training loop
     for epoch in range(cfg.training.epochs):
         total_loss = 0
@@ -176,33 +188,32 @@ def train(rank, cfg: DictConfig):
             batch['att_mask'] = batch['att_mask'].to(device)
 
             optimizer.zero_grad()
-            embeddings = model(batch)
 
-            if n_gpus > 1:
-                embeddings = gather_embeddings(embeddings, n_gpus)
-                # if rank == 0:
-                #     for modality in embeddings.keys():
-                #         print(f"{modality} mean embedding {embeddings[modality].mean()}")
+            # Mixed precision training
+            with autocast():
+                embeddings = model(batch)
+                if n_gpus > 1:
+                    embeddings = gather_embeddings(embeddings, n_gpus)
+                    print(embeddings['text'].shape)
+                loss = criterion(embeddings)
 
-            loss = criterion(embeddings)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-            optimizer.step()
+            # Backpropagation
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
 
             total_loss += loss.item()
 
-            
             if rank == 0:
-                wandb.log({"batch_loss": loss.item()})
-                print(f"batch_loss = {loss.item()}")
-            
-
+                wandb.log({"batch_loss": loss.item()/batch['codex'].shape[0]})
+                print(f"batch_loss = {loss.item()/batch['codex'].shape[0]}")
 
         avg_loss = total_loss / len(train_loader)
         if rank == 0:
             wandb.log({"epoch_loss": avg_loss})
             print(f'Epoch {epoch+1}/{cfg.training.epochs}, Avg Loss: {avg_loss}')
-
 
     if rank == 0:
         wandb.finish()

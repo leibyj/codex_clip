@@ -3,6 +3,8 @@
 
 # data
 *.pkl
+checkpoints/
+embedding_plots/
 
 # hydra
 outputs/
@@ -11,6 +13,7 @@ outputs/
 logs/
 pretrained_encoder_weights/
 *.sh
+test.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

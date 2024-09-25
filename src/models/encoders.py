@@ -69,7 +69,7 @@ class ResNetbackbone(nn.Module):
         super(ResNetbackbone, self).__init__()
         # Load the pretrained ResNet
         resnet = models.resnet18(pretrained=True)
-        self.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False) #TODO: cat the channel three times/ psuedo-RGB
         self.conv1.weight.data = resnet.conv1.weight.data.mean(dim=1, keepdim=True)
         resnet.conv1 = self.conv1
         
@@ -197,7 +197,7 @@ class CodexCNNTransformer(nn.Module):
         
         chn_imgs = samples.view(batch_size * num_channels, 1, 256, 256)
         cnn_embeddings = self.cnn(chn_imgs)
-        cnn_embeddings = cnn_embeddings.view(batch_size, num_channels, -1)  # Reshape back to (batch_size, num_channels, embed_dim)
+        cnn_embeddings = cnn_embeddings.view(batch_size, num_channels, -1)  # reshape back to (batch_size, num_channels, embed_dim)
 
         # channel embeddings and CLS token
         channel_embeddings, padding_mask = self.channel_embedding(c_strings)
@@ -209,7 +209,7 @@ class CodexCNNTransformer(nn.Module):
         padding_mask = torch.cat([cls_padding_mask, padding_mask], dim=1)  # (batch_size, num_channels + 1)
 
         out = self.transformer_encoder(x.transpose(0, 1), src_key_padding_mask=padding_mask)  # (num_channels + 1, batch_size, embed_dim)
-        # TODO: CLS embedding as global representation or (attention) pooling of channel embeddings?? MAE paper used mean of all patch embeddings
+        # TODO: CLS embedding as global representation or (attention) pooling of channel embeddings?? MAE paper used mean of all patch embeddings. Some channels are practically empty.
         cls_embedding = out[0]  # (1, batch_size, embed_dim)
         return cls_embedding.squeeze(0) 
 
@@ -266,7 +266,6 @@ class CodexCNNTransformerIBOT(nn.Module):
 
     def random_masking(self, x, mask_ratio):
         """
-        Randomly mask a portion of the input embeddings.
         Args:
             x (Tensor): Input embeddings (batch_size, num_channels, embed_dim).
             mask_ratio (float): The percentage of embeddings to mask.
@@ -285,11 +284,12 @@ class CodexCNNTransformerIBOT(nn.Module):
 
         return x * mask, masked_indices, visible_indices
 
-    def forward(self, samples, c_strings):
+    def forward(self, samples, c_strings, return_embeddings=False):
         """
         Args:
             samples (Tensor): Batch of image tensors of shape (batch_size, c, 256, 256).
             c_strings (list of list of str): Batch of lists of strings of channels for each sample
+            return_embeddings (bool): Whether to return embeddings or loss.
         """
         batch_size, num_channels, _, _ = samples.size()
 
@@ -299,7 +299,7 @@ class CodexCNNTransformerIBOT(nn.Module):
 
         # Channel embeddings, masking, and cls token
         channel_embeddings, padding_mask = self.channel_embedding(c_strings)
-        combined_embeddings = cnn_embeddings + channel_embeddings
+        combined_embeddings = cnn_embeddings + channel_embeddings #
         combined_masked, masked_indices, visible_indices = self.random_masking(combined_embeddings, self.mask_ratio)
         batch_cls_token = self.cls_token.expand(batch_size, -1, -1)  # (batch_size, 1, embed_dim)
         x = torch.cat([batch_cls_token, combined_masked], dim=1)  # (batch_size, num_patches + 1, embed_dim)
@@ -309,6 +309,9 @@ class CodexCNNTransformerIBOT(nn.Module):
         # student
         out = self.transformer_encoder(x.transpose(0, 1), src_key_padding_mask=padding_mask)  # (num_patches + 1, batch_size, embed_dim)
         student_pred = self.student_projection(out.transpose(0, 1))  # (batch_size, num_patches + 1, embed_dim)
+
+        if return_embeddings:
+            return student_pred[:, 0, :]  # Return CLS token embeddings
 
         # teacher
         # copy unmasked view

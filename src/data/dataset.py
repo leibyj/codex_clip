@@ -118,17 +118,46 @@ class MultiCodexTextDatasetFull(BaseCodexTextDataset):
         caption = dat['text']['biomarker_expression'] + " " + dat['text']['cell_types']
 
         if self.transform is not None:
-            # Apply the transform to each channel separately
             codex_img = torch.stack([self.transform(c.unsqueeze(0)).squeeze(0) for c in codex_img])
 
-        # Text processing
         input_ids, attention_mask = self.text_processing(caption)
 
         return {
             "codex": codex_img,
             "text": input_ids,
             "att_mask": attention_mask,
-            "channels": bms
+            "channels": bms,
+            "region_id": region_id  # Add this line
+        }
+
+class MultiCodexDatasetFull(BaseCodexTextDataset):
+    def __init__(self, root_dir, region_ids, tokenizer=None, max_len=256, transform=None):
+        """
+        Dataset class for loading full CODEX datasets without text captions.
+        
+        Args:
+            root_dir (str): Directory where the .pkl files are stored.
+            region_ids (list of str): List of region IDs to load.
+            tokenizer (transformers.PreTrainedTokenizer): HF tokenizer
+            max_len (int): context length for text data.
+            transform (callable, optional): Optional transform to be applied on a sample.
+        """
+        super().__init__(root_dir, region_ids, tokenizer, max_len)
+        self.transform = transform
+
+    def __getitem__(self, idx):
+        region_id, sample_id = self.sample_index[idx]
+        dat, bms = self.load_sample(region_id, sample_id)
+        
+        codex_img = torch.tensor(dat['codex'], dtype=torch.float32)
+
+        if self.transform is not None:
+            codex_img = torch.stack([self.transform(c.unsqueeze(0)).squeeze(0) for c in codex_img])
+
+        return {
+            "codex": codex_img,
+            "channels": bms,
+            "region_id": region_id 
         }
 
 def padded_collate_fn(batch):
@@ -162,10 +191,48 @@ def padded_collate_fn(batch):
     padded_codex_imgs = torch.stack(padded_codex_imgs)
     texts = torch.stack(texts)
     attention_masks = torch.stack(attention_masks)
+    # texts, attention_masks = None, None
+
+    region_ids = [item['region_id'] for item in batch]  # Add this line
 
     return {
         "codex": padded_codex_imgs,
         "text": texts,
         "att_mask": attention_masks,
-        "channels": channels
+        "channels": channels,
+        "region_id": region_ids  # Add this line
+    }
+
+def padded_collate_fn_codex_only(batch):
+
+    # Find the maximum number of channels in the batch
+    max_channels = max(item['codex'].shape[0] for item in batch)
+
+    # Prepare lists for the padded codex images, texts, and attention masks
+    padded_codex_imgs = []
+    channels = []
+
+    for item in batch:
+        codex_img = item['codex']
+        c, h, w = codex_img.shape
+
+        # Pad the codex image to match the max number of channels in the batch
+        if c < max_channels:
+            padding = (0, 0, 0, 0, 0, max_channels - c)  # Pad only on the channel dimension
+            padded_img = F.pad(codex_img, padding, mode='constant', value=0)
+        else:
+            padded_img = codex_img
+
+        padded_codex_imgs.append(padded_img)
+        channels.append(item['channels'])
+
+    # Stack tensors to create batch
+    padded_codex_imgs = torch.stack(padded_codex_imgs)
+
+    region_ids = [item['region_id'] for item in batch]  # Add this line
+
+    return {
+        "codex": padded_codex_imgs,
+        "channels": channels,
+        "region_id": region_ids  # Add this line
     }

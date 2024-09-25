@@ -18,7 +18,7 @@ class MMCLIPLoss(nn.Module):
         modality_pairs = list(combinations(emb_dict.keys(), 2))
         total_loss = 0.0
         num_pairs = len(modality_pairs)
-        # for each pair, get the standard CLIP loss
+
         for (modality_a, modality_b) in modality_pairs:
             
             emb_a = emb_dict[modality_a]
