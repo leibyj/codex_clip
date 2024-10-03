@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
+from transformers import CLIPModel
+    
 
 class CodexEncoder(nn.Module):
     def __init__(self, marker_groups=0, hidden_dim=384, device='cpu', pt_path=''):
@@ -59,6 +61,20 @@ class CodexEncoder(nn.Module):
 
         return attn_output.squeeze(0)
 
+class PLIPbackbone(nn.Module):
+    def __init__(self):
+        super(PLIPbackbone, self).__init__()
+        self.plip_encoder = CLIPModel.from_pretrained("vinid/plip").vision_model
+        self.plip_encoder.embeddings.patch_embedding = torch.nn.Conv2d(1, 768, kernel_size=(32, 32), stride=(32, 32), bias=False)
+        self.plip_encoder.embeddings.position_embedding = torch.nn.Embedding(65, 768)
+        self.plip_encoder.embeddings.position_ids = torch.arange(65).expand((1, -1))
+        self.plip_encoder.post_layernorm = nn.LayerNorm(768)  # Ensure this layer is used
+
+    def forward(self, x):
+        out = self.plip_encoder(x)
+        out = out.last_hidden_state[:, 0, :]
+        out = self.plip_encoder.post_layernorm(out)  # Ensure this layer is used in the forward pass
+        return out
 
 class ResNetbackbone(nn.Module):
     def __init__(self, embed_dim):
@@ -153,7 +169,6 @@ class ChannelEmbedding(nn.Module):
         batch_embeddings = torch.stack(batch_embeddings, dim=0)
         padding_mask = torch.tensor(padding_mask, device=batch_embeddings.device, dtype=torch.bool)
 
-
         return batch_embeddings, padding_mask
 
 class CodexCNNTransformer(nn.Module):
@@ -226,7 +241,8 @@ class CodexCNNTransformerIBOT(nn.Module):
             student_temperature (float): Temperature parameter for student network's softmax.
         """
         super(CodexCNNTransformerIBOT, self).__init__()
-        self.cnn = ResNetbackbone(embed_dim)
+        # self.cnn = ResNetbackbone(embed_dim)
+        self.cnn = PLIPbackbone()    
         self.channel_embedding = ChannelEmbedding(embed_dim, vocab)
         self.cls_token = nn.Parameter(torch.randn(1, 1, embed_dim))  # CLS token for global feature representation
         self.mask_ratio = mask_ratio

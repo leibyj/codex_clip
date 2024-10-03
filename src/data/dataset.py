@@ -28,20 +28,19 @@ class BaseCodexTextDataset(Dataset):
         """Build and return a list of (region_id, sample_id) pairs."""
         sample_index = []
         for rid in self.region_ids:
-            file_path = os.path.join(self.root_dir, f'{rid}_processed.pkl')
-            with open(file_path, 'rb') as f:
-                data = pickle.load(f)
-                for sample_id in data.keys():
-                    if sample_id != "channel_biomarkers":
-                        sample_index.append((rid, sample_id))
+            region_dir = os.path.join(self.root_dir, rid)
+            for sample_file in os.listdir(region_dir):
+                if sample_file.endswith('.pkl'):
+                    sample_id = os.path.splitext(sample_file)[0]
+                    sample_index.append((rid, sample_id))
         return sample_index
 
     def load_sample(self, region_id, sample_id):
         """Load and return the sample corresponding to region_id and sample_id."""
-        file_path = os.path.join(self.root_dir, f'{region_id}_processed.pkl')
+        file_path = os.path.join(self.root_dir, region_id, f'{sample_id}.pkl')
         with open(file_path, 'rb') as f:
             data = pickle.load(f)
-            return data[sample_id], data['channel_biomarkers']
+            return data, data['channel_biomarkers']
 
     def text_processing(self, caption):
         """Process the text data."""
@@ -144,6 +143,57 @@ class MultiCodexDatasetFull(BaseCodexTextDataset):
         """
         super().__init__(root_dir, region_ids, tokenizer, max_len)
         self.transform = transform
+
+    def __getitem__(self, idx):
+        region_id, sample_id = self.sample_index[idx]
+        dat, bms = self.load_sample(region_id, sample_id)
+        
+        codex_img = torch.tensor(dat['codex'], dtype=torch.float32)
+
+        if self.transform is not None:
+            codex_img = torch.stack([self.transform(c.unsqueeze(0)).squeeze(0) for c in codex_img])
+
+        return {
+            "codex": codex_img,
+            "channels": bms,
+            "region_id": region_id 
+        }
+
+class MultiCodexDatasetEval(BaseCodexTextDataset):
+    def __init__(self, root_dir, region_ids, tokenizer=None, max_len=256, transform=None):
+        """
+        Args:
+            root_dir (str): Directory where the .pkl files are stored.
+            region_ids (list of str): List of region IDs to load.
+            tokenizer (transformers.PreTrainedTokenizer): HF tokenizer
+            max_len (int): context length for text data.
+            transform (callable, optional): Optional transform to be applied on a sample.
+        """
+        super().__init__(root_dir, region_ids, tokenizer, max_len)
+        self.transform = transform
+
+    def build_sample_index(self):
+        """Build and return a list of (region_id, sample_id) pairs."""
+        sample_index = []
+        for rid in self.region_ids:
+            region_file = os.path.join(self.root_dir, f'{rid}_processed.pkl')
+            with open(region_file, 'rb') as f:
+                data = pickle.load(f)
+                for sample_id in data.keys():
+                    if sample_id == 'channel_biomarkers':
+                        continue
+                    sample_index.append((rid, sample_id))
+        return sample_index
+
+    def load_sample(self, region_id, sample_id):
+        """Load and return the sample corresponding to region_id and sample_id."""
+        region_file = os.path.join(self.root_dir, f'{region_id}_processed.pkl')
+        with open(region_file, 'rb') as f:
+            data = pickle.load(f)
+            sample_data = data[sample_id]
+            # print(sample_id)
+            # print(sample_data.keys())
+            return sample_data, data['channel_biomarkers']
 
     def __getitem__(self, idx):
         region_id, sample_id = self.sample_index[idx]

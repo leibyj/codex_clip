@@ -1,13 +1,13 @@
 #training
 epochs: 10
-learning_rate: 0.001
-weight_decay: 0.01
-max_grad_norm: 1.0
+learning_rate: 0.00005
+weight_decay: 0.05
+max_grad_norm: 3.0
 text_lr: 5e-5
 codex_lr: 5e-4
 optimizer: "adam"
 log_interval: 10
-warmup_batches: 50
+warmup_batches: 1000
 amp: true 
 
 
