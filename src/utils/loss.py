@@ -3,9 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from itertools import combinations
 
-class MMCLIPLoss(nn.Module):
+class PairwiseCLIPLoss(nn.Module):
     def __init__(self, temperature: float = 1.0):
-        super(MMCLIPLoss, self).__init__()
+        super(PairwiseCLIPLoss, self).__init__()
         self.temperature = temperature
 
     def forward(self, emb_dict: dict) -> torch.Tensor:
@@ -45,3 +45,50 @@ class MMCLIPLoss(nn.Module):
         # Average again?
         # final_loss = total_loss / num_pairs
         return total_loss
+
+
+class OneVersusAllLoss(nn.Module):
+    def __init__(self, temperature: float = 1.0):
+        super(OneVersusAllLoss, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, emb_dict: dict) -> torch.Tensor:
+        """
+        Args:
+            emb_dict (dict): A dictionary where keys are modality names and values are 
+                             the corresponding embeddings (Tensor) of shape (batch_size, embedding_dim).
+                             It must contain exactly three modalities.
+        """
+        modalities = list(emb_dict.keys())
+        assert len(modalities) == 3, "Exactly three modalities are required."
+
+        emb_list = [F.normalize(emb_dict[mod], p=2, dim=-1) for mod in modalities]
+        emb_all = torch.cat(emb_list, dim=0)  # shape (3*batch_size, embedding_dim)
+
+        batch_size = emb_list[0].size(0)
+        device = emb_list[0].device
+        indices = torch.arange(batch_size, device=device)
+
+        total_loss = 0.0
+
+        for m_idx, emb_m in enumerate(emb_list):
+            # Compute logits
+            logits = emb_m @ emb_all.t() / self.temperature  # shape (batch_size, 3*batch_size)
+            log_probs = F.log_softmax(logits, dim=1)
+
+            # Create positive mask
+            positive_mask = torch.zeros(batch_size, 3*batch_size, device=device, dtype=torch.bool)
+            other_modalities = [idx for idx in range(3) if idx != m_idx]
+            for o_idx in other_modalities:
+                positive_mask[indices, indices + o_idx * batch_size] = True
+
+            # Compute loss
+            num_positives = len(other_modalities)
+            loss = - (log_probs * positive_mask.float()).sum(dim=1) / num_positives
+            loss = loss.mean()
+            total_loss += loss
+
+        # Average over modalities
+        final_loss = total_loss / 3.0
+
+        return final_loss

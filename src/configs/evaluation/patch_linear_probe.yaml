@@ -1,0 +1,7 @@
+# eval
+name: "patch_linear_probe"
+run_eval_during_training: false
+steps: 100
+batch_size: 8
+data_path: "/project/zhihuanglab/jleiby/enable_data/individual_samples"
+label_file_path: '/project/zhihuanglab/jleiby/enable_data/UPMC_cell_composition_labels/combined_output_group_2.csv'

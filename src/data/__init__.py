@@ -1,3 +1,3 @@
-from .dataset import MultiCodexTextDatasetSubset, MultiCodexTextDatasetFull, padded_collate_fn, MultiCodexDatasetFull, padded_collate_fn_codex_only, MultiCodexDatasetEval
+from .dataset import MultiCodexTextDatasetSubset, MultiCodexTextDatasetFull, padded_collate_fn, MultiCodexDatasetFull, TrimodalDataset, padded_collate_fn_codex_only, LinearProbeEvalDataset, padded_collate_fn_linear_probe, padded_collate_fn_trimodal
 
-__all__ = ['MultiCodexTextDatasetSubset', 'MultiCodexTextDatasetFull', 'padded_collate_fn', 'MultiCodexDatasetFull', 'padded_collate_fn_codex_only', 'MultiCodexDatasetEval']
+__all__ = ['MultiCodexTextDatasetSubset', 'MultiCodexTextDatasetFull', 'padded_collate_fn', 'MultiCodexDatasetFull', 'TrimodalDataset', 'padded_collate_fn_codex_only', 'LinearProbeEvalDataset', 'padded_collate_fn_linear_probe', 'padded_collate_fn_trimodal']

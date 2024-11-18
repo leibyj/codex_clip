@@ -1,9 +1,10 @@
 defaults:
   - _self_
   - dataset: default
-  - model: codex_text_cnn
+  - model: trimodal
   - training: base
   - loss: base
+  - evaluation: patch_linear_probe
 
 
 wandb:

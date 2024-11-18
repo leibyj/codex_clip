@@ -5,6 +5,7 @@
 *.pkl
 checkpoints/
 embedding_plots/
+results/
 
 # hydra
 outputs/

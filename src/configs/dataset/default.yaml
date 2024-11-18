@@ -3,6 +3,4 @@ path: "/project/zhihuanglab/jleiby/codex_clip/data"
 batch_size: 4
 shuffle: True
 max_length: 128 # context window for BERT
-channel_groups:
-  immune: ["CD45", "CD3e", "CD68", "Ki67", "DAPI"]
-  tumor: ['PanCK', 'CD31', 'Vimentin', 'aSMA', 'Podoplanin']
+channel_groups: None
